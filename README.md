@@ -33,7 +33,7 @@ bastion_IP = 62.84.124.168
 someinternalhost_IP = 10.130.0.20
 
 **Сгенерированный сертификат установленный на сервер с Pritunl**
-![Valid cerificate](https://disk.yandex.ru/i/nBV9JluBn2WLrg)
+![Valid cerificate](https://raw.githubusercontent.com/Otus-DevOps-2021-11/dberezikov_infra/packer-base/VPN/valid_cert.png)
 
 # ДЗ №4 "Деплой тестового приложения"
 
@@ -91,13 +91,13 @@ $ git checkout -b packer-base
 $ git mv deploy.sh install_* config-script
 ```  
 3. Устанавливаем Packer
-``css
+```css
 $ curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
 $ sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
 $ sudo apt-get update && sudo apt-get install packer
 ```
 4. Получаем folder-id и создаем сервисный аккаунт в Yandex.Cloud
-``css
+```css
 $ yc config list | grep folder-id
 $ SVC_ACCT="appuser"
 $ FOLDER_ID="<полученный folder-id>"
@@ -118,13 +118,13 @@ $ yc iam key create --service-account-id $ACCT_ID --output ~/key/key.json
 ```
 7. В git репозитории создаем каталог **packer**
 ```css
-mkdir packer
+$ mkdir packer
 ```
 Создаем файл Packer шаблона ubuntu16.json
 ```css
-touch packer/ubuntu16.json
+$ touch packer/ubuntu16.json
 ``` 
-8. Описываем в шаблоне ubuntu16.json **Builder** секцию 
+8. Описываем в шаблоне ubuntu16.json секцию **Builder**  
 ```css
     "builders": [
         {
@@ -143,7 +143,7 @@ touch packer/ubuntu16.json
         }
 ```
 9. Добавляем в packer шаблон секцию **Provisioners**
-``css
+```css
     "provisioners": [
         {
             "type": "shell",
@@ -173,8 +173,8 @@ $ packer build ./ubuntu16.json
 ```css
 "use_ipv4_nat": "true"
 ```
-Так же столкнулся с проблемой _Quota limit vpc.networks.count exceeded_, решается удалением сетевых профилей в YC
-Для корректности выполнения скрипта **install_ruby.sh** добавил строку _sleep 30_ после команды **apt_update**
+Так же столкнулся с проблемой _Quota limit vpc.networks.count exceeded_, решается удалением сетевых профилей в YC   
+Для корректности выполнения скрипта **install_ruby.sh** добавил строку _sleep 30_ после команды **apt update**
 
 14. Создание ВМ из созданного образа через web Yandex.Cloud
 
@@ -191,9 +191,9 @@ $ git clone -b monolith https://github.com/express42/reddit.git
 $ cd reddit && bundle install
 $ puma -d
 ```
-17. Параметризирование шаблона
-Создан файл variables.json с рядом параметров. variables.json добавлен в .gitignore
-На основе variables.json создан файл variables.json.examples с вымышленными значениями
+17. Параметризирование шаблона  
+Создан файл variables.json с рядом параметров, variables.json добавлен в .gitignore  
+На основе variables.json создан файл variables.json.example с вымышленными значениями
 ```css
 {
     "folder_id": "id",
@@ -206,7 +206,7 @@ $ puma -d
 }
 ```
 
-18. Построение bake-образа (задание со⭐)
+18. Построение bake-образа (задание со⭐)  
 На основе шаблона ubuntu16.json создан шаблон immutable.json с добавлением в секцию **provisioners** скрипта на деплой и запуск приложения
 ```css
 {
@@ -277,7 +277,7 @@ systemctl enable reddit-app.service
 systemctl start reddit-app.service
 ```
 
-20. Автоматизация создания ВМ (задание со⭐)
+20. Автоматизация создания ВМ (задание со⭐)  
 Создаем скрипт create-reddit-vm.sh для автоматического создани ВМ через Yandex.Cloud CLI с последующим запуском скрипта на установку зависимостей, деплоя приложения и запуска приложения с помощью systemd unit
 ```css
 #!/bin/bash
