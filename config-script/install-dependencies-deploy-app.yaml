@@ -1,0 +1,35 @@
+#cloud-config
+users:
+  - name: appuser
+    groups: sudo
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh-authorized-keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC5r+a3wgOx1nQ5Gawxw+qpnvOFsdKg5XbhiJtt81N9soTZGiPtxoSbnTBnBDA9UoDWKxm1XAGIqzaASJNBnsDdf6sYXVLvC0QbjgF8205CWrErk9+6o7qy7wffJCAv7ZuIE03dUMYL9Ddv+OgcfyzGWJ+ChbHwwfYPq4QukbrmL70eaw09wr4bEQU/MPSPHcWZqiSz0reWYz9nqh3P6rjyiYyeWoa8Bm871BV/gkxLgxHqqjIqGFbq/reDxxSAdNumhIsHksMERyxnbA1SGh95XTSPy8LAfad/v2/aULYwnwIemEa5KIKgWW5od4QWA4B0dlyVba8NGiEl09VoJGpX appuser
+runcmd:
+  - apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv 0C49F3730359A14518585931BC711F9BA15703C6
+  - echo "deb [ arch=amd64,arm64 ] http://repo.mongodb.org/apt/ubuntu xenial/mongodb-org/3.4 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-3.4.list
+  - apt update
+  - apt install -y mongodb-org
+  - systemctl start mongod
+  - systemctl enable mongod
+  - apt install -y ruby-full ruby-bundler build-essential apt-transport-https ca-certificates
+  - apt update
+  - apt install -y git
+  - mkdir /var/run/my-reddit-app && mkdir /opt/my-reddit-app
+  - git clone -b monolith https://github.com/express42/reddit.git /opt/my-reddit-app
+  - cd /opt/my-reddit-app
+  - bundle install
+  - echo "[Unit]" >> /etc/systemd/system/reddit-app.service 
+  - echo "Description=My Reddit App" >> /etc/systemd/system/reddit-app.service 
+  - echo "After=network.target" >> /etc/systemd/system/reddit-app.service 
+  - echo "After=mongod.service" >> /etc/systemd/system/reddit-app.service 
+  - echo "[Service]" >> /etc/systemd/system/reddit-app.service 
+  - echo "Type=simple" >> /etc/systemd/system/reddit-app.service 
+  - echo "PIDFile=/var/run/my-reddit-app/my-reddit.pid" >> /etc/systemd/system/reddit-app.service 
+  - echo "WorkingDirectory=/opt/my-reddit-app" >> /etc/systemd/system/reddit-app.service 
+  - echo "ExecStart=/usr/local/bin/puma" >> /etc/systemd/system/reddit-app.service 
+  - echo "[Install]" >> /etc/systemd/system/reddit-app.service 
+  - echo "WantedBy=multi-user.target" >> /etc/systemd/system/reddit-app.service 
+  - systemctl enable reddit-app.service
+  - systemctl start reddit-app.service
