@@ -863,7 +863,7 @@ $ terraform apply
 # ДЗ №7 "Принципы организации инфраструктурного кода и работа над инфраструктурой в команде на примере Terraform"
 
 1. Создаем новую ветку
-dfsdfsdfsdf``css
+```css
 $ git checkout -b terraform-2
 ```
 
