@@ -31,12 +31,6 @@ variable subnet_id {
 variable service_account_key_file {
   description = "key .json"
 }
-variable app_instance_name {
-  description = "Name of APP instance"
-}
-variable db_instance_name {
-  description = "Name of DB instance"
-}
 variable instances_count {
   description = "Count of instances"
   default     = 1
@@ -50,14 +44,11 @@ variable db_disk_image {
   default     = "reddit-db-base"
 }
 variable access_key {
-  description = "Static access key identifier"
+  description = "Static access key identifier" 
 }
 variable secret_key {
-  description = "Secret access key value"
+  description = "Secret access key value" 
 }
 variable bucket {
-  description = "Bucket name"
-}
-variable endpoint {
-  description = "Yandex.Cloud endpoint"
+  description = "Bucket name" 
 }

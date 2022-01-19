@@ -1,3 +1,7 @@
+variable db_instance_name {
+  description = "Name of DB instance"
+  default     = "reddit-db"
+}
 variable public_key_path {
   description = "Path to the public key used for ssh access"
 }

@@ -1302,4 +1302,161 @@ $ rm main.tf outputs.tf terraform.tfvars variables.tf
 $ terarform fmt
 ```
 
+## Задания с ⭐
+Настройка хранения стейт файла в remote backends
 
+1. Копируем в основной каталог terraform файлы **main.tf**, **variables.tf** и **terraform.tfvars** для создания bucket
+```css
+$ cp stage/main.tf main.tf
+$ cp stage/variables.tf variables.tf 
+$ cp stage/terraform.tfvars terraform.tfvars
+```
+
+2. Описываем  переменные необходимые для создания bucket
+
+В файл **variables.tf** добавляем строки
+```css
+variable access_key {
+  description = "Static access key identifier"
+}
+variable secret_key {
+  description = "Secret access key value"
+}
+variable bucket {
+  description = "Bucket name"
+}
+```
+
+Выполняем команду для получения значений access_key, secret_key 
+```css
+$ yc iam access-key create --service-account-name terraform
+```
+
+Полученные значения и имя создаваемого бакета записываем в файл **terraform.tfvars**
+```css
+access_key               = "***"
+secret_key               = "***"
+bucket                   = "dberezikov-bucket"
+```
+
+3. Корректируем файл **main.tf** описывая в нем конфигурацию создаваемого бакета
+```css
+provider "yandex" {
+  service_account_key_file = var.service_account_key_file
+  cloud_id                 = var.cloud_id
+  folder_id                = var.folder_id
+  zone                     = var.zone
+}
+resource "yandex_storage_bucket" "dberezikov-otus-bucket" {
+  access_key    = var.access_key
+  secret_key    = var.secret_key
+  bucket        = var.bucket
+#  force_destroy = true
+}
+```
+
+4. Проверяем корректность конфигурации и создаем бакет
+```css
+$ terraform plan
+$ terraform apply
+```
+
+5. В каждой директории **stage** и **prod** создаем файл **backend.tf**
+
+Конфигурационный файл не поддерживает переменные, пришлось указать значения параметров в явном виде
+
+Содержимое файла 
+```css
+terraform {
+  backend "s3" {
+    endpoint   = "storage.yandexcloud.net"
+    bucket     = "dberezikov-bucket"
+    key        = "stage/terraform.tfstate"   ## значение "prod/terraform.tfstate" для каталога prod
+    region     = "ru-central1"
+    access_key = "***"
+    secret_key = "***"
+
+    skip_region_validation      = true
+    skip_credentials_validation = true
+  }
+}
+```
+
+6. После сохранения файла необходимо выполнить команду в каталогах **stage** и **prod**
+```css
+$ terraform init
+```
+
+7. При одновременном запуске деплоя инстансов из сред stage и prod возникает ошибка, т.к. название инстансов не уникальны для каждой среды, введем переменные
+
+Добавляем в **module/app/variables.tf**
+```css
+variable app_instance_name {
+  description = "Name of APP instance"
+  default     = "reddit-app"
+}
+```
+Добавляем в **module/db/variables.tf**
+```css
+variable db_instance_name {
+  description = "Name of DB instance"
+  default     = "reddit-db"
+}
+```
+
+В **modules/app/main.tf** корректируем имя инстанса
+```css
+resource "yandex_compute_instance" "app" {
+  name = var.app_instance_name
+  labels = {
+    tags = var.app_instance_name
+  }
+```
+
+В **modules/db/main.tf** корректируем имя инстанса
+```css
+resource "yandex_compute_instance" "db" {
+  name = var.db_instance_name
+  labels = {
+    tags = var.db_instance_name
+  }
+```
+
+В файл **variables.tf** каждой среды добавляем
+```css
+variable app_instance_name {
+  description = "Name of APP instance"
+}
+variable db_instance_name {
+  description = "Name of DB instance"
+}
+```
+
+В **terraform.tfvars** каждой среды добавляем 
+```css
+app_instance_name        = "reddir-app-prod" # "reddir-app-stage" для stage среды 
+db_instance_name         = "reddir-db-prod"  # "reddir-db-stage"  для stage среды
+```
+
+В **main.tf** в модули добавляем строки с переменными для имен инстансов
+```css
+module "app" {
+...
+ app_instance_name = var.app_instance_name
+}
+module "db" {
+...
+ db_instance_name  = var.db_instance_name
+}
+```
+
+8. Удаляем файлы **terraform.tfstate** в каждой среде
+
+9. Запукаем проверку на ошибки и сборку инстансов
+```css
+$ terraform apply
+```
+
+10. Проверяем созданные инстансы
+
+## Задания с ⭐ 
