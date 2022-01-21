@@ -34,6 +34,10 @@ someinternalhost_IP = 10.130.0.20
 
 **Сгенерированный сертификат установленный на сервер с Pritunl**
 ![Valid cerificate](https://raw.githubusercontent.com/Otus-DevOps-2021-11/dberezikov_infra/packer-base/VPN/valid_cert.png)
+rk_interface {
+    subnet_id = var.subnet_id
+    nat       = true
+  }
 
 # ДЗ №4 "Деплой тестового приложения"
 
@@ -856,3 +860,606 @@ host  = self.network_interface.0.nat_ip_address
 $ terraform plan
 $ terraform apply
 ```
+# ДЗ №7 "Принципы организации инфраструктурного кода и работа над инфраструктурой в команде на примере Terraform"
+
+1. Создаем новую ветку
+```css
+$ git checkout -b terraform-2
+```
+
+2. Устанавливаем в **variables.tf** количество инстансов app равным 1
+```css
+variable instances_count {
+  description = "Count of instances"
+  default     = 1
+}
+```
+
+3. Переносим файл **lb.tf** в **terraform/files**
+```css
+$ mv lb.tf terraform/files
+```
+
+4. В **main.tf** определяем ресурсы yandex_vpc_network и yandex_vpc_subnet
+```css
+resource "yandex_vpc_network" "app-network" {
+  name = "reddit-app-network"
+}
+
+resource "yandex_vpc_subnet" "app-subnet" {
+  name           = "reddit-app-subnet"
+  zone           = "ru-central1-a"
+  network_id     = "${yandex_vpc_network.app-network.id}"
+  v4_cidr_blocks = ["192.168.10.0/24"]
+}
+```
+
+5. Применим изменения
+```css
+$ terraform apply
+```
+
+6. В файле **main.tf** в конфигурации vm ссылаемся на атрибуты ресурса который создает IP
+```css
+network_interface {
+  subnet_id = yandex_vpc_subnet.app-subnet.id
+  nat = true
+}
+```
+
+7. Пересоздаем инстанс, что бы увидеть очередность создания ресурсов зависимых друг от друга
+```css
+$ terraform destroy
+$ terraform plan
+$ terraform apply
+```
+
+8. Вынесение БД и APP на отдельный инстанс VM
+
+В директории **packer** создаем новые шаблоны **db.json** и **app.json** на основе шаблона **ubuntu16.json** и убираем все не нужное
+```css
+$ cp ../packer/ubuntu16.json ../packer/db.json
+$ cp ../packer/ubuntu16.json ../packer/app.json
+```
+
+Финальное содержимое шаблона **db.json**
+```css
+{
+    "builders": [
+        {
+            "type": "yandex",
+            "service_account_key_file": "{{user `service_account_key_file_path`}}",
+            "folder_id": "{{user `folder_id`}}",
+            "source_image_family": "{{user `source_image_family`}}",
+            "image_name": "reddit-base-db-{{timestamp}}",
+            "image_family": "reddit-base",
+            "ssh_username": "ubuntu",
+            "platform_id": "{{user `platform_id`}}",
+            "use_ipv4_nat": "true",
+            "instance_cores": "{{user `instance_cores`}}",
+            "instance_mem_gb": "{{user `instance_mem_gb`}}",
+            "instance_name": "{{user `instance_name`}}"
+        }
+    ],
+    "provisioners": [
+        {
+            "type": "shell",
+            "script": "scripts/install_mongodb.sh",
+            "execute_command": "sudo {{.Path}}"
+        }
+    ]
+}
+```
+
+Финальное содержимое шаблона app.json
+```css
+{
+    "builders": [
+        {
+            "type": "yandex",
+            "service_account_key_file": "{{user `service_account_key_file_path`}}",
+            "folder_id": "{{user `folder_id`}}",
+            "source_image_family": "{{user `source_image_family`}}",
+            "image_name": "reddit-base-app-{{timestamp}}",
+            "image_family": "reddit-base",
+            "ssh_username": "ubuntu",
+            "platform_id": "{{user `platform_id`}}",
+            "use_ipv4_nat": "true",
+            "instance_cores": "{{user `instance_cores`}}",
+            "instance_mem_gb": "{{user `instance_mem_gb`}}",
+            "instance_name": "{{user `instance_name`}}"
+        }
+    ],
+    "provisioners": [
+        {
+            "type": "shell",
+            "script": "scripts/install_ruby.sh",
+            "execute_command": "sudo {{.Path}}"
+        }
+    ]
+}
+```
+
+Запускаем сборку новых образов для APP и DB 
+```css
+$ packer build -var-file=variables.json app.json
+$ packer build -var-file=variables.json db.json
+```
+
+9. Вводим новую переменную для образа APP и DB
+
+В **variables.tf** добавляем 
+```css
+variable app_disk_image {
+  description = "Disk image for reddit app"
+  default     = "reddit-app-base"
+}
+variable db_disk_image {
+  description = "Disk image for reddit db"
+  default     = "reddit-db-base"
+}
+```
+
+Получаем id новых образов собранных через packer
+```css
+$ yc compute image list
+```
+
+В **terraform.tfvars** добавляем полученные id образов
+```css
+app_disk_image           = "***"
+db_disk_image            = "***"
+```
+
+10. Разделем конфиг **main.tf** на несколько частей
+
+Создадим файл **app.tf** с конфигурацией VM для приложения
+```css
+$ touch app.tf
+```
+
+Содержимое файла **app.tf**
+```css
+resource "yandex_compute_instance" "app" {
+  name = "reddit-app"
+
+  labels = {
+    tags = "reddit-app"
+  }
+  resources {
+    cores  = 1
+    memory = 2
+  }
+
+  boot_disk {
+    initialize_params {
+      image_id = var.app_disk_image
+    }
+  }
+
+  network_interface {
+    subnet_id = yandex_vpc_subnet.app-subnet.id
+    nat = true
+  }
+
+  metadata = {
+  ssh-keys = "ubuntu:${file(var.public_key_path)}"
+  }
+}
+```
+
+Создадим файл **db.tf** с конфигурацией VM для приложения
+```css
+$ touch db.tf
+```
+
+Содержимое файла **db.tf**
+```css
+resource "yandex_compute_instance" "db" {
+  name = "reddit-db"
+  labels = {
+    tags = "reddit-db"
+  }
+
+  resources {
+    cores  = 1
+    memory = 2
+  }
+
+  boot_disk {
+    initialize_params {
+      image_id = var.db_disk_image
+    }
+  }
+
+  network_interface {
+    subnet_id = yandex_vpc_subnet.app-subnet.id
+    nat = true
+  }
+
+  metadata = {
+  ssh-keys = "ubuntu:${file(var.public_key_path)}"
+  }
+}
+```
+
+11. Создаем файл **vpc.tf**, в который выносим конфигурацию сети и подсети
+
+```css
+touch vpc.tf
+```
+
+Содержимое файла **vpc.tf**
+```css
+resource "yandex_vpc_network" "app-network" {
+  name = "app-network"
+}
+
+resource "yandex_vpc_subnet" "app-subnet" {
+  name           = "app-subnet"
+  zone           = "ru-central1-a"
+  network_id     = "${yandex_vpc_network.app-network.id}"
+  v4_cidr_blocks = ["192.168.10.0/24"]
+}
+```
+
+12. После выноса конфигураций по разнам файлам в **main.tf** остается только определение провайдера
+```css
+provider "yandex" {
+  service_account_key_file = var.service_account_key_file
+  cloud_id  = var.cloud_id
+  folder_id = var.folder_id
+  zone      = var.zone
+}
+```
+
+13. В outputs.tf добавляем вывод адресов инстансов
+```css
+output "external_ip_address_app" {
+  value = yandex_compute_instance.app.network_interface.0.nat_ip_address
+}
+output "external_ip_address_db" {
+  value = yandex_compute_instance.db.network_interface.0.nat_ip_address
+}
+```
+
+14. Применяем конфигурацию, проверяем ошибки, при необходимости устраняем
+```css
+$ terraform apply
+``` 
+
+15. После успешного деплоя, заходим на каждый хост по ssh и проверяем факт установки необходимого ПО
+После проверки удаляем инстансы
+```css
+$ terraform destroy
+```
+
+## Подготовка конфигурационных файлов для работы с модулями
+
+16. Создаем структуру каталогов для DB
+```css
+$ mkdir -p modules/db
+```
+
+17. Копируем конфигурацию для DB в модули
+```css
+$ cp db.tf modules/db/main.tf
+``` 
+
+18. В файле **modules/db/variables.tf** определим переменные, которые используются в db.tf
+```css
+variable public_key_path {
+  description = "Path to the public key used for ssh access"
+}
+  variable db_disk_image {
+  description = "Disk image for reddit db"
+  default = "reddit-db-base"
+}
+variable subnet_id {
+description = "Subnets for modules"
+}
+```
+
+19. Создаем структуру каталогов для APP
+```css
+$ mkdir -p modules/app
+```
+
+20. Копируем конфигурацию для APP в модули
+```css
+$ cp app.tf modules/app/main.tf
+``` 
+
+21. В файле **modules/app/variables.tf** определим переменные, которые используются в app.tf
+```css
+variable public_key_path {
+  description = "Path to the public key used for ssh access"
+}
+variable app_disk_image {
+  description = "Disk image for reddit app"
+  default = "reddit-app-base"
+}
+variable subnet_id {
+description = "Subnets for modules"
+}
+```
+
+22. Вывод выходных переменных в файлы
+
+Файл **modules/app/outputs.tf**
+```css
+output "external_ip_address_app" {
+  value = yandex_compute_instance.app.network_interface.0.nat_ip_address
+}
+```
+
+Файл **modules/db/outputs.tf**
+```css
+output "external_ip_address_db" {
+  value = yandex_compute_instance.db.network_interface.0.nat_ip_address
+}
+```
+
+23. Удаление ненужных файлов в основном каталоге terraform
+```css
+$ rm db.tf и app.tf vpc.tf
+```
+
+24. После удаления **vpc.tf** в файлах **modules/db/main.tf** и **modules/app/main.tf** скорректировал значение subnet_id
+
+Было
+```css
+  network_interface {
+    subnet_id = yandex_vpc_subnet.app-subnet.id
+    nat = true
+  }
+```
+
+Стало
+```css
+  network_interface {
+    subnet_id = var.subnet_id
+    nat       = true
+  }
+```
+
+25. В главный конфигурационный файл **main.tf** добавляем вызов модулей
+```css
+provider "yandex" {
+  service_account_key_file = var.service_account_key_file
+  cloud_id  = var.cloud_id
+  folder_id = var.folder_id
+  zone      = var.zone
+}
+module "app" {
+  source          = "./modules/app"
+  public_key_path = var.public_key_path
+  app_disk_image  = var.app_disk_image
+  subnet_id       = var.subnet_id
+}
+
+module "db" {
+  source          = "./modules/db"
+  public_key_path = var.public_key_path
+  db_disk_image   = var.db_disk_image
+  subnet_id       = var.subnet_id
+}
+```
+
+26. В каталоге terraform выхываем загрузку модулей
+```css
+$ terraform get
+```
+
+27. Переопределяем переменную для внешнего ip в файле **outputs.tf**
+```css
+output "external_ip_address_app" {
+  value = module.app.external_ip_address_app
+}
+output "external_ip_address_db" {
+  value = module.db.external_ip_address_db
+}
+```
+
+28. Проверим и запустим сборку новых инстансов
+```css
+$ terraform apply
+```
+
+29. Проверяем ssh доступ до инстансов
+
+## Создание Stage и Prod окрудений
+
+30. В каталоге terraform создаем подкаталоги stage и prod
+```css
+$ mkdir terrform/stage
+$ mkdir terrform/prod
+```
+
+31. Копируем файлы конфигураций в созданные каталоги
+```css
+$ cp main.tf variables.tf outputs.tf terraform.tfvars stage
+$ cp main.tf variables.tf outputs.tf terraform.tfvars prod
+```
+
+32. Изменяем путь до модулей в **main.tf** каталога **stage** и **prod**
+```css
+source          = "../modules/app"
+```
+
+33. Проверка правильности настроек каждого окружения и последующим удаление созданных инстансов
+
+
+## Самостоятельное задание
+
+1. Удалить из каталога terraform файлы **main.tf**, **outputs.tf**, **terraform.tfvars**, **variables.tf**
+```css
+$ rm main.tf outputs.tf terraform.tfvars variables.tf
+```
+
+2. Форматирование конфигурации файлов в каталогах **stage** и **prod**
+```css
+$ terarform fmt
+```
+
+## Задания с ⭐
+Настройка хранения стейт файла в remote backends
+
+1. Копируем в основной каталог terraform файлы **main.tf**, **variables.tf** и **terraform.tfvars** для создания bucket
+```css
+$ cp stage/main.tf main.tf
+$ cp stage/variables.tf variables.tf 
+$ cp stage/terraform.tfvars terraform.tfvars
+```
+
+2. Описываем  переменные необходимые для создания bucket
+
+В файл **variables.tf** добавляем строки
+```css
+variable access_key {
+  description = "Static access key identifier"
+}
+variable secret_key {
+  description = "Secret access key value"
+}
+variable bucket {
+  description = "Bucket name"
+}
+```
+
+Выполняем команду для получения значений access_key, secret_key 
+```css
+$ yc iam access-key create --service-account-name terraform
+```
+
+Полученные значения и имя создаваемого бакета записываем в файл **terraform.tfvars**
+```css
+access_key               = "***"
+secret_key               = "***"
+bucket                   = "dberezikov-bucket"
+```
+
+3. Корректируем файл **main.tf** описывая в нем конфигурацию создаваемого бакета
+```css
+provider "yandex" {
+  service_account_key_file = var.service_account_key_file
+  cloud_id                 = var.cloud_id
+  folder_id                = var.folder_id
+  zone                     = var.zone
+}
+resource "yandex_storage_bucket" "dberezikov-otus-bucket" {
+  access_key    = var.access_key
+  secret_key    = var.secret_key
+  bucket        = var.bucket
+#  force_destroy = true
+}
+```
+
+4. Проверяем корректность конфигурации и создаем бакет
+```css
+$ terraform plan
+$ terraform apply
+```
+
+5. В каждой директории **stage** и **prod** создаем файл **backend.tf**
+
+Конфигурационный файл не поддерживает переменные, пришлось указать значения параметров в явном виде
+
+Содержимое файла 
+```css
+terraform {
+  backend "s3" {
+    endpoint   = "storage.yandexcloud.net"
+    bucket     = "dberezikov-bucket"
+    key        = "stage/terraform.tfstate"   ## значение "prod/terraform.tfstate" для каталога prod
+    region     = "ru-central1"
+    access_key = "***"
+    secret_key = "***"
+
+    skip_region_validation      = true
+    skip_credentials_validation = true
+  }
+}
+```
+
+6. После сохранения файла необходимо выполнить команду в каталогах **stage** и **prod**
+```css
+$ terraform init
+```
+
+7. При одновременном запуске деплоя инстансов из сред stage и prod возникает ошибка, т.к. название инстансов не уникальны для каждой среды, введем переменные
+
+Добавляем в **module/app/variables.tf**
+```css
+variable app_instance_name {
+  description = "Name of APP instance"
+  default     = "reddit-app"
+}
+```
+Добавляем в **module/db/variables.tf**
+```css
+variable db_instance_name {
+  description = "Name of DB instance"
+  default     = "reddit-db"
+}
+```
+
+В **modules/app/main.tf** корректируем имя инстанса
+```css
+resource "yandex_compute_instance" "app" {
+  name = var.app_instance_name
+  labels = {
+    tags = var.app_instance_name
+  }
+```
+
+В **modules/db/main.tf** корректируем имя инстанса
+```css
+resource "yandex_compute_instance" "db" {
+  name = var.db_instance_name
+  labels = {
+    tags = var.db_instance_name
+  }
+```
+
+В файл **variables.tf** каждой среды добавляем
+```css
+variable app_instance_name {
+  description = "Name of APP instance"
+}
+variable db_instance_name {
+  description = "Name of DB instance"
+}
+```
+
+В **terraform.tfvars** каждой среды добавляем 
+```css
+app_instance_name        = "reddir-app-prod" # "reddir-app-stage" для stage среды 
+db_instance_name         = "reddir-db-prod"  # "reddir-db-stage"  для stage среды
+```
+
+В **main.tf** в модули добавляем строки с переменными для имен инстансов
+```css
+module "app" {
+...
+ app_instance_name = var.app_instance_name
+}
+module "db" {
+...
+ db_instance_name  = var.db_instance_name
+}
+```
+
+8. Удаляем файлы **terraform.tfstate** в каждой среде
+
+9. Запукаем проверку на ошибки и сборку инстансов
+```css
+$ terraform apply
+```
+
+10. Проверяем созданные инстансы
+
+## Задания с ⭐
+
+До конца реализовать задание неудалось.
+Были добавленые провиженеры в модули, сборка и установка проходит, но не разобрался как реализовать подключение от приложения к БД по внутреннему ip. Пока, что бы не тормозить выполнение других ДЗ, задачу осталяю, позже вернусь, что бы доделать.
