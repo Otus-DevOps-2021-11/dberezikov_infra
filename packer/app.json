@@ -12,7 +12,7 @@
 	    "use_ipv4_nat": "true",
 	    "instance_cores": "{{user `instance_cores`}}",
 	    "instance_mem_gb": "{{user `instance_mem_gb`}}",
-	    "instance_name": "{{user `instance_name`}}"
+	    "instance_name": "{{user `instance_name`}}-app"
         }
     ],
     "provisioners": [
