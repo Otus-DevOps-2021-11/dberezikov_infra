@@ -1463,3 +1463,339 @@ $ terraform apply
 
 До конца реализовать задание неудалось.
 Были добавленые провиженеры в модули, сборка и установка проходит, но не разобрался как реализовать подключение от приложения к БД по внутреннему ip. Пока, что бы не тормозить выполнение других ДЗ, задачу осталяю, позже вернусь, что бы доделать.
+
+# ДЗ №8 "Управление конфигурацией. Основные DevOps инструменты. Знакомство с Ansible"
+
+1. Создаем новую ветку в репозитории
+```css
+$ git checkout -b ansible-1
+```
+
+2. Установка Python и pip 
+На сервер уже был установлен python3, проверим его версию
+```css
+$ python3 --version
+```
+
+Установим пакетный менеджер pip
+```css
+$ sudo apt install python3-pip
+```
+
+3. Установим Ansible и проверим версию
+```css
+$ pip3 install ansible
+$ ansible --version
+```
+
+4. Задеплоим через terraform **app** и **db** сервер из прошлого урока окружения **stage**
+```css
+$ cd stage
+$ terraform apply -auto-approve
+```
+
+5. Создадим **inventory** файл с указанием информации для подключения к созданным хостам
+```css
+$ mkdir ansible
+# cd ansible
+$ touch inventory
+```
+
+Содержимое файла **inventory**
+```css
+appserver ansible_host=<ip app сервера>
+dbserver ansible_host=<ip db сервера>
+```
+
+6. Создадим файл **ansible.cfg** с параметрами для подключения к хостам
+```css
+$ touch ansible.cfg
+```
+
+Содержимое файла
+
+```css
+[defaults]
+inventory = ./inventory
+remote_user = ubuntu
+private_key_file = ~/.ssh/appuser
+host_key_checking = False
+retry_files_enabled = False
+
+```
+
+7. Проверим команду ping до каждого из серверов
+```css
+$ ansible appserver -m ping
+$ ansible dbserver -m pingi
+```
+В командах не указывается путь до **inventory** файла, т.к. этот путь мы указали в **ansible.cfg**
+
+8. Скорректируем файл **inventory** и разделим хосты на группы
+```css
+[app]
+appserver ansible_host=<ip app сервера>
+
+[db]
+dbserver ansible_host=<ip db сервера>
+```
+
+9. Проверяем команду ping для всей группы хостов app
+```css
+$ ansible app -m ping
+```
+
+10. Создаем файл **inventory.yml** и переносим в него содержимое файла **inventory**
+```css
+$ touch inventory.yml
+```
+
+Содержимое файла
+```css
+app:
+  hosts:
+    appserver:
+      ansible_host: <ip app сервера>
+db:
+  hosts:
+    dbserver:
+      ansible_host: <ip db сервера>
+```
+
+11. Переопределим путь до **inventory** файла в **ansible.cfg**
+```css
+[defaults]
+inventory = ./inventory.yml
+remote_user = ubuntu
+private_key_file = ~/.ssh/appuser
+host_key_checking = False
+retry_files_enabled = False
+```
+
+12. Проверим выполнение команд 
+
+Проверка факта установки ruby и bundler на app сервере через модуль **command** (работает только для одной команды)
+```css
+$ ansible app -m command -a 'ruby -v'
+$ ansible app -m command -a 'bundler -v'
+```
+
+Проверка через модуль **shell** для нескольких комманд
+```css
+$ ansible app -m shell -a 'ruby -v; bundler -v'
+```
+
+13. Проверим для db сервера статус mongodb через модули **command** и **systemd**
+```css
+$ ansible db -m command -a 'systemctl status mongod'
+$ ansible db -m systemd -a name=mongod
+```
+
+14. Более универсальным является модуль **service**, т.к. возвращает ряд переменных
+```css
+$ ansible db -m service -a name=mongod
+```
+
+15. Применение модуля **command** и **git** для клонирования репозиториев
+
+Модуль **command**
+```css
+$ ansible app -m command -a \
+ 'git clone https://github.com/express42/reddit.git /home/ubuntu/reddit'
+```
+
+Модуль **git**
+```css
+$ ansible app -m git -a \
+ 'repo=https://github.com/express42/reddit.git dest=/home/ubuntu/reddit'
+```
+
+16. Написание playbook для клонирования репозитория
+```css
+$ touch clone.yml
+```
+
+Содердимое файла **clone.yml**
+```css
+---
+- name: Clone
+  hosts: app
+  tasks:
+    - name: Clone repo
+      git:
+        repo: https://github.com/express42/reddit.git
+        dest: /home/ubuntu/reddit
+```
+
+Проверка выполнения playbook
+```css
+$ ansible-playbook clone.yml
+```
+В результатх вывода видно, что изменений не было **changed=0**, т.к. репозиторий уже был клонирован ранее через другие модули, перед выполнением проводится проверка на наличие файлов 
+```css
+PLAY RECAP *************************************************************************************************************************************************************************************************************************************************  
+appserver                  : ok=2    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+```
+
+17. Удаление с app сервера ранее клонированного через другие модули репозитория и повторынй запуск playbook
+```css
+$ ansible app -m shell -a 'rm -rf ~/reddit'
+```
+
+Повторный запуск playbook
+```css
+$ ansible-playbook clone.yml
+```
+
+Теперь в выводе есть измениния, о чем свидетельствует счетчик *changed=1*
+```css
+PLAY RECAP *************************************************************************************************************************************************************************************************************************************************  
+appserver                  : ok=2    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+```
+
+## Задания с ⭐
+## Динамическое инвентори
+
+По условию задания необходимо:
+1. Создать файл **inventory.json** в формате описанном в [документации](https://nklya.medium.com/%D0%B4%D0%B8%D0%BD%D0%B0%D0%BC%D0%B8%D1%87%D0%B5%D1%81%D0%BA%D0%BE%D0%B5-%D0%B8%D0%BD%D0%B2%D0%B5%D0%BD%D1%82%D0%BE%D1%80%D0%B8-%D0%B2-ansible-9ee880d540d6) 
+2. Написать скрипт позволяющий генерировать **inventory.json** на лету из реальных данных о хостах взятых в Yandex.Cloud 
+3. В файле **ansible.cfg** сделать настройки для работы с JSON-inventory
+4. Готовые утилиты не рассматриваем, пишем свою реализацию
+
+### Реализация
+
+1. Что бы получить список хостов из Yandex.Cloud используем консольную утилиту **yc compute instance list** с форматированием вывода
+```css
+yc compute instance list | awk '{print$10}' | grep -v '^|' | sed -E '/^$/d'
+```
+
+Результат вывода
+```css
+62.84.124.197
+62.84.126.118
+```
+
+2. Теперь имея вывод ip адресов хостов можем записать его в временный inventory файл **inventory_temp** с простой структурой
+```css
+[all]
+62.84.124.197
+62.84.126.118
+```
+
+Имея только экспорт списка хостов через консольную утилиту, мы заранее не знаем к каким группам относятся хосты, поэтому объеденим хосты в группу [all]
+
+3. Теперь можно вызвать команду **ansible-inventory** и в качестве входящего параметра указать созданный временный inventory файло, что бы сформировать json файл формата по требования п1 условия задания
+Результат выполнения команды **ansible-inventory --list -i inventory_temp**:
+```css
+{
+    "_meta": {
+        "hostvars": {}
+    },
+    "all": {
+        "children": [
+            "ungrouped"
+        ]
+    },
+    "ungrouped": {
+        "hosts": [
+            "62.84.124.197",
+            "62.84.126.118"
+        ]
+    }
+}
+```
+
+4. Оформляем скрипт по условиям [документации](https://nklya.medium.com/%D0%B4%D0%B8%D0%BD%D0%B0%D0%BC%D0%B8%D1%87%D0%B5%D1%81%D0%BA%D0%BE%D0%B5-%D0%B8%D0%BD%D0%B2%D0%B5%D0%BD%D1%82%D0%BE%D1%80%D0%B8-%D0%B2-ansible-9ee880d540d6)
+
+```css
+$ touch dinamic-inventory.sh 
+```
+
+Как работает скрипт
+- При запуске скрипта с параметром **--list** возвращается список хостов в формате JSON и создается файл **inventory.json** с содержимым по условиям п1 задания
+- При запуске скрипта с параметром **--host** возвращается **_meta** с пустой секцией **hostvars** т.к. мы не хотим передавать переменные для Ansible для каждого хоста (при текущей реализации у нас нет переменных)
+
+Содержимое скрипта
+```css
+#!/bin/bash
+
+if [ "$1" == "--list" ] ; then
+  if [ -e $inventory_temp ]; then
+          echo "[all]" > inventory_temp
+  else
+          touch inventory_temp
+          echo "[all]" > inventory_temp
+  fi
+  yc compute instance list | awk '{print$10}' | grep -v '^|' | sed -E '/^$/d' >> inventory_temp
+  if [ -e $inventory.json ]; then
+          ansible-inventory --list -i inventory_temp > inventory.json
+  else
+          touch inventory.json
+          ansible-inventory --list -i inventory_temp > inventory.json
+  fi
+  ansible-inventory --list -i inventory_temp
+  rm inventory_temp
+elif [ "$1" == "--host" ]; then
+          echo '{"_meta": {"hostvars": {}}}'
+  else
+          echo "{ }"
+fi
+```
+
+5. Делаем скрипт исполняемым
+```css
+$ sudo chmod a+x dinamic-inventory.sh
+```
+
+6. Редактируем **ansible.cfg** для работы с JSON-inventory
+```css
+[defaults]
+inventory = ./dinamic-inventory.sh
+remote_user = ubuntu
+private_key_file = ~/.ssh/appuser
+host_key_checking = False
+retry_files_enabled = False
+```
+
+В качестве inventory указываем сам скрипт **dinamic-inventory.sh**
+
+7. Проверяем работу динамического инвентори на примере модуля ping по п3 описания задачи
+```css
+ansible all -m ping
+```
+
+Пример вывода
+```css
+62.84.124.197 | SUCCESS => {
+    "ansible_facts": {
+        "discovered_interpreter_python": "/usr/bin/python3"
+    },
+    "changed": false,
+    "ping": "pong"
+}
+62.84.126.118 | SUCCESS => {
+    "ansible_facts": {
+        "discovered_interpreter_python": "/usr/bin/python3"
+    },
+    "changed": false,
+    "ping": "pong"
+}
+```
+
+Для дополнительной проверки выключаем хост с ip 62.84.124.197 через web интерфейс или через консоль и повторно запускаем модуль **ping**
+```css
+62.84.126.118 | SUCCESS => {
+    "ansible_facts": {
+        "discovered_interpreter_python": "/usr/bin/python3"
+    },
+    "changed": false,
+    "ping": "pong"
+}
+```
+
+Прошла проверка только второго хоста, т.к. первый выключен и его внешний ip не передается в выводе команды ```yc compute instance list```
+
+
+###  Отличие динамическое инвентори от статического 
+В статическом инвентори необходимо держать в актуальном состоянии inventory файл и дописывать туда новые хосты, удалять хосты выведенные из работы
+В динамическом инвентори скрипт или инвентори плагин позволяет динамически забирать актуальный список хостов из источника
