@@ -1,7 +1,7 @@
 {
     "folder_id": "id",
     "source_image_family": "ubuntu-1604-lts",
-    "service_account_key_file_path": "key.json.example",
+    "service_account_key_file_path": "packer/key.json.example",
     "platform_id": "standard-v2",
     "instance_cores": "2",
     "instance_mem_gb": "2",
