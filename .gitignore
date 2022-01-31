@@ -5,3 +5,4 @@ packer/variables.json
 *.tfvars
 .terraform/
 terraform/files/appuser.pub
+*.retry

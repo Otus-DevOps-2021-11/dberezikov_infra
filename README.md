@@ -1799,3 +1799,448 @@ ansible all -m ping
 ###  Отличие динамическое инвентори от статического 
 В статическом инвентори необходимо держать в актуальном состоянии inventory файл и дописывать туда новые хосты, удалять хосты выведенные из работы
 В динамическом инвентори скрипт или инвентори плагин позволяет динамически забирать актуальный список хостов из источника
+
+# ДЗ №9 Деплой и управление конфигурацией с Ansible
+
+1. Создаем новую ветку ```ansible-2```
+```css
+$ git checkout -b ansible-2
+```
+
+2. Перед началом работ добавим в ```.gitignore``` временные файлы Ansible
+```css
+$ echo "*.retry" >> .gitignore
+``
+
+3. Создаем playbok 
+```css
+$ cd ansible
+$ touch ansible/reddit_app.yml
+```
+
+4. Заполняем playbook ```reddit_app.yml``` сценариями
+
+### Подготовительный этап
+
+4.1 Создаем директорию ```templates``` в корне директории ```ansible```
+```css
+$ mkdir templates
+```
+
+В директории ```templates``` создаем файл шаблона ```mongod.conf.j2```
+```css
+$ touch templates/mongod.conf.j2
+```
+
+Заполняем шаблон содержимым
+```css
+# Where and how to store data.
+storage:
+  dbPath: /var/lib/mongodb
+  journal:
+    enabled: true
+
+# where to write logging data.
+systemLog:
+  destination: file
+  logAppend: true
+  path: /var/log/mongodb/mongod.log
+
+# network interfaces
+net:
+  port: {{ mongo_port | default('27017') }}
+  bindIp: {{ mongo_bind_ip }}
+```
+
+Переменная ```mongo_bind_ip``` должна быть задана в разделе ```vars:``` в playbook
+
+4.2 Создаем шаблон ```db_config.j2``` в директории ```templates```
+```css
+$ touch templates/db_config.j2
+```
+
+Содержание ```templates/db_config.j2```
+```css
+DATABASE_URL={{ db_host }}
+```
+
+Переменная ```db_host``` тоже должна быть задана в ```vars:``` в playbook
+
+
+
+После добавления сценария для MongoDB, Unit для приложения, настройки инстанса приложения, сценариев деплоя и установки зависимостей playbook должен выглядить следкющим образом
+
+```css
+---
+- name: Configure hosts & deploy application
+  hosts: all
+  vars:
+    mongo_bind_ip: 0.0.0.0
+    db_host: 10.128.0.28
+  tasks:
+    - name: Change mongo config file
+      become: true
+      template:
+        src: templates/mongod.conf.j2
+        dest: /etc/mongod.conf
+        mode: 0644
+      tags: db-tag
+      notify: restart mongod
+
+    - name: Add unit file for Puma
+      become: true
+      copy:
+        src: files/puma.service
+        dest: /etc/systemd/system/puma.service
+      tags: app-tag
+      notify: reload puma
+
+    - name: Add config for DB connections
+      template:
+        src: templates/db_config.j2
+        dest: /home/ubuntu/db_config
+      tags: app-tag
+
+    - name: enable puma
+      become: true
+      systemd: name=puma enabled=yes
+      tags: app-tag
+
+    - name: Fetch the latest version of application code
+      git:
+        repo: 'https://github.com/express42/reddit.git'
+        dest: /home/ubuntu/reddit
+        version: monolith
+      tags: deploy-tag
+      notify: reload puma
+
+    - name: Bundle install
+      bundler:
+        state: present
+        chdir: /home/ubuntu/reddit
+      tags: deploy-tag
+
+  handlers:
+  - name: restart mongod
+    become: true
+    service: name=mongod state=restarted
+
+  - name: reload puma
+    become: true
+    systemd: name=puma state=restarted
+```
+
+Переменную ```db_host``` необходимо менять при каждом новом создании инстансов
+
+5. В сценарии добавлены теги ```db-tag```, ```app-tag``` и ```deploy-tag``` для возможности вызова отдельных сценариев для хостов типа db и app из одного общего плейбука
+Пример команды вызова сценариев с тегом ```app-tag``` для app сервера
+```css
+$ ansible-playbook reddit_app.yml --limit app --tags app-tag
+``` 
+
+6. Проверка и запуск всех сценариев в playbook
+```css
+$ ansible-playbook reddit_app.yml --check
+$ ansible-playbook reddit_app.yml
+```
+
+7. Для проверки результата вызовим в браузере public ip app сервера с портом 9292
+
+8. Делим playbook на сценарии
+
+8.1 Создаем новый файл ```reddit_app2.yml``` в директории ```ansible```
+```css
+$ touch reddit_app2.yml
+```
+
+8.3 Переносим все наработик из reddit_app.yml в новый playbook
+Для каждого сценария определяем host и прописываем свой handlers 
+
+Содержимое получившегося playbook
+```css
+---
+- name: Configure MongoDB
+  hosts: db
+  tags: db-tag
+  become: true
+  vars:
+    mongo_bind_ip: 0.0.0.0
+  tasks:
+    - name: Change mongo config file
+      template:
+        src: templates/mongod.conf.j2
+        dest: /etc/mongod.conf
+        mode: 0644
+      notify: restart mongod
+
+  handlers:
+  - name: restart mongod
+    service: name=mongod state=restarted
+
+- name: Configure hosts
+  hosts: app
+  tags: app-tag
+  become: true
+  vars:
+   db_host: 10.128.0.27
+  tasks:
+    - name: Add unit file for Puma
+      copy:
+        src: files/puma.service
+        dest: /etc/systemd/system/puma.service
+      notify: reload puma
+
+    - name: Add config for DB connections
+      template:
+        src: templates/db_config.j2
+        dest: /home/ubuntu/db_config
+        owner: ubuntu
+        group: ubuntu
+
+    - name: enable puma
+      systemd: name=puma enabled=yes
+
+  handlers:
+  - name: reload puma
+    systemd: name=puma state=reloaded
+
+- name: Deploy application
+  hosts: app
+  tags: deploy-tag
+  tasks:
+    - name: Fetch the latest version of application code
+      git:
+        repo: 'https://github.com/express42/reddit.git'
+        dest: /home/ubuntu/reddit
+        version: monolith
+      tags: deploy-tag
+      notify: restart puma
+
+    - name: Bundle install
+      bundler:
+        state: present
+        chdir: /home/ubuntu/reddit
+      tags: deploy-tag
+
+  handlers:
+  - name: restart puma
+    become: true
+    systemd: name=puma state=restarted
+```
+
+8.4 Пересоздаем инфраструктуру и проверяем новый playbook
+```css
+$ terraform destroy
+$ terraform apply
+$ ansible-playbook reddit_app2.yml
+```
+
+Применив ```--tags``` с указание на конкретный тег мы можем вызвать отдельные сценарии playbook
+
+
+9. Для более удобного использования playbook разобъем его на нескольок отдельных playbooks и перенесем в них необходимые сценарии
+Переименуем прежние playbooks
+```css
+$ mv reddit_app.yml reddit_app_one_play.yml
+$ mv reddit_app2.yml reddit_app_multiple_plays.yml
+```
+
+Создадим новые playbooks
+
+```css
+$ touch app.yml db.yml deploy.yml
+```
+
+Содердимое ```app.yml```
+```css
+---
+- name: Configure hosts
+  hosts: app
+  become: true
+  vars:
+   db_host: 10.128.0.25
+  tasks:
+    - name: Add unit file for Puma
+      copy:
+        src: files/puma.service
+        dest: /etc/systemd/system/puma.service
+      notify: reload puma
+
+    - name: Add config for DB connections
+      template:
+        src: templates/db_config.j2
+        dest: /home/ubuntu/db_config
+        owner: ubuntu
+        group: ubuntu
+
+    - name: enable puma
+      systemd: name=puma enabled=yes
+
+  handlers:
+  - name: reload puma
+    systemd: name=puma state=reloaded
+```
+
+
+Содержимое ```db.yml```
+```css
+---
+- name: Configure MongoDB
+  hosts: db
+  become: true
+  vars:
+    mongo_bind_ip: 0.0.0.0
+  tasks:
+    - name: Change mongo config file
+      template:
+        src: templates/mongod.conf.j2
+        dest: /etc/mongod.conf
+        mode: 0644
+      notify: restart mongod
+
+  handlers:
+  - name: restart mongod
+    service: name=mongod state=restarted
+```
+
+Содержимое ```deploy.yml```
+```css
+---
+- name: Deploy application
+  hosts: app
+  tasks:
+    - name: Fetch the latest version of application code
+      git:
+        repo: 'https://github.com/express42/reddit.git'
+        dest: /home/ubuntu/reddit
+        version: monolith
+      tags: deploy-tag
+      notify: restart puma
+
+    - name: Bundle install
+      bundler:
+        state: present
+        chdir: /home/ubuntu/reddit
+      tags: deploy-tag
+
+  handlers:
+  - name: restart puma
+    become: true
+    systemd: name=puma state=restarted
+```
+
+10. Создаем главный playbook, который будет включать в себя все остальные
+```css
+$ touch site.yml
+```
+
+Содержимое файла
+```css
+---
+- import_playbook: db.yml
+- import_playbook: app.yml
+- import_playbook: deploy.yml
+```
+
+11. Для проверки пересоздаем инфратсруктуру и запустим главный playbook
+```css
+$ terraform destroy
+$ terraform apply
+$ ansible-playbook site.yml
+```
+
+## Задания с ⭐
+## Изменим провижининг в Packer
+
+Заменим выполнение bash скриптов в Packer на запуск Ansible сценариев
+Условия: Использовать модули ```command``` и ```shell``` нежелательно!
+
+1. Создадим ```ansible/packer_app.yml``` в котором установим Ruby и Bundler
+```css
+$ touch packer_app.yml
+``` 
+
+Содержимое файла
+```css
+---
+- name: Install Ruby and Bundler
+  hosts: all
+  become: true
+  tasks:
+    - name: Install packages
+      apt:
+        update_cache: yes
+        name:
+        - ruby-full
+        - ruby-bundler
+        - build-essential
+        - git
+        state: present
+```
+
+2. Создадим ```ansible/packer_db.yml``` в котором установим MongoDB
+```css
+$ touch packer_db.yml
+```
+
+Содердимое файла
+```css
+---
+- name: Install MondoDB
+  hosts: all
+  become: true
+  tasks:
+    - name: Add apt key
+      apt_key:
+        id: 0C49F3730359A14518585931BC711F9BA15703C6
+        keyserver: keyserver.ubuntu.com
+
+    - name: Fetch the mongodb repo
+      apt_repository:
+        repo: deb [ arch=amd64,arm64 ] http://repo.mongodb.org/apt/ubuntu xenial/mongodb-org/3.4 multiverse
+        state: present
+
+    - name: Install MongoDB
+      apt:
+        name: mongodb-org
+        state: present
+
+    - name: Unabled service
+      systemd:
+        name: mongod
+        enabled: yes
+```
+
+3. Теперь опишем вызов Ansible сценариев в Packer
+Замена секции Provision в образе packer/app.json
+```css
+"provisioners": [
+    {
+         "type": "ansible",
+         "playbook_file": "ansible/packer_app.yml"
+    }
+]
+```
+
+Замена секции Provision в образе packer/db.json
+```css
+"provisioners": [
+    {
+         "type": "ansible",
+         "playbook_file": "ansible/packer_db.yml"
+    }
+]
+```
+
+4. Запускаем билд новых образов через Packer из корня проекта
+```css
+$ packer build -var-file=packer/variables.json packer/app.json
+$ packer build -var-file=packer/variables.json packer/db.json 
+```
+
+5. Собирем из полученных образов инстансы через Terraform и проверяем результат
+
+## Задания с ⭐
+## Динамический inventory
+
+Удалось в теории разобраться как работает (по внутренней документации) и как запустить [динамический inventory] (https://github.com/ansible/ansible/pull/61722), но проверить на практиче и потом все описать пока не хватает времени.
