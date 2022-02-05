@@ -2243,4 +2243,403 @@ $ packer build -var-file=packer/variables.json packer/db.json
 ## Задания с ⭐
 ## Динамический inventory
 
-Удалось в теории разобраться как работает (по внутренней документации) и как запустить [динамический inventory] (https://github.com/ansible/ansible/pull/61722), но проверить на практиче и потом все описать пока не хватает времени.
+Удалось в теории разобраться как работает (по внутренней документации) и как запустить [динамический inventory](https://github.com/ansible/ansible/pull/61722), но проверить на практиче и потом все описать пока не хватает времени.
+
+# ДЗ №10 Ansible: работа с ролями и окружениями
+
+1. Создаем ветку ```ansible-3```
+```css
+$ git checkout -b ansible-3
+```
+
+2. В директории ```ansible``` создаем директорию ```roles``` и выполняем в ней команды для создания заготовки ролей
+```css
+$ mkdir roles
+$ cd roles
+$ ansible-galaxy init app
+$ ansible-galaxy init db
+```
+Роль для базы данных
+3. Копируем секцию ```tasks``` из плейбука ```ansible/db.yml``` и вставим ее в файл в директории ```tasks``` роли ```db```
+Содержимое файла ```ansible/roles/db/tasks/main.yml```
+```css
+# tasks file for db
+- name: Change mongo config file
+  template:
+    src: templates/mongod.conf.j2
+    dest: /etc/mongod.conf
+    mode: 0644
+  notify: restart mongod
+```
+
+4. Копируем конфиг из ```ansible/templates``` в ```ansble/roles/db/templates```
+```css
+$ cp templates/mongod.conf.j2 roles/db/templates/mongod.conf.j2
+```
+
+5. В файле ```roles/db/tasks/main.yml``` оставляем только имя конифга в ```src:```
+
+6. В ```roles/db/handlers/main.yml``` определяем handler
+```css
+# handlers file for db
+- name: restart mongod
+  service: name=mongod state=restarted
+```
+
+7. В секции переменных по умолчанию ```roles/db/defaults/main.yml``` определим определим переменные
+```css
+# defaults file for db
+mongo_port: 27017
+mongo_bind_ip: 127.0.0.1
+```
+
+Роль для приложения
+8. Копируем секцию ```tasks``` из плейбука ```ansible/app.yml``` и вставим ее в файл в директории ```tasks``` роли ```app```, оставляя тольок имена файлов в ```src``` модулей ```copy``` и ```template```
+```css
+---
+# tasks file for app
+- name: Add unit file for Puma
+  copy:
+    src: puma.service
+    dest: /etc/systemd/system/puma.service
+  notify: reload puma
+
+- name: Add config for DB connections
+  template:
+    src: db_config.j2
+    dest: /home/ubuntu/db_config
+    owner: ubuntu
+    group: ubuntu
+
+- name: enable puma
+  systemd: name=puma enabled=yes
+```
+
+9. Скопируйте файл ```db_config.j2``` из директории ```ansible/templates``` в директорию ```ansible/roles/app/templates/```
+```css
+$ cp templates/db_config.j2 roles/app/files/db_config.j2
+```
+
+10. Файл ```ansible/files/puma.service``` скопируем в ```ansible/roles/app/files/```
+```css
+$ cp files/puma.service roles/app/files/puma.service
+```
+
+11. Описываем handler в ```roles/app/handlers/main.yml```
+```css
+# handlers file for app
+- name: reload puma
+  systemd: name=puma state=restarted
+```
+
+12. Определяем переменную по умолчанию в ```roles/app/defaults/main.yml```
+```css
+# defaults file for app
+db_host: 127.0.0.1
+```
+
+13. В плейбуке ```ansible/app.yml``` удаляем все лишнее и заменяем на вызов роли
+```css
+- name: Configure App
+  hosts: app
+  become: true
+
+  vars:
+    db_host: 10.132.0.2
+
+  roles:
+    - app
+```
+
+14. В ```ansible/db.yml``` так удаляем ненужное и прописываем вызов роли
+```css
+- name: Configure MongoDB
+  hosts: db
+
+  become: true
+
+  vars:
+    mongo_bind_ip: 0.0.0.0
+
+  roles:
+    - db
+```
+
+15. Для проверки ролей пересоздаем инфраструктуру и запускаем плейбук
+```css
+$ terraform destroy
+$ terraform apply
+$ ansible-playbook site.yml --check
+$ ansible-playbook site.yml
+```
+
+16. Проверяем доступность приложени через браузер
+
+Разбиваем инфраструктуру на окружения
+17. Создадим директории ```environments/stage``` и ```environments/prod```
+```css
+$ mkdir environments/stage
+$ mkdir environments/prod
+```
+
+18. Скопируем inventory файл в каждое окружение
+```css
+$ cp inventory.yml environtents/prod
+$ cp inventory.yml environtents/stage
+$ rm inventory.yml 
+```
+
+19. Определим окружение по умолчанию в ```ansible/ansible.cfg```
+```css
+[defaults]
+inventory = ./environments/stage/inventory # Inventory по-умолчанию задается здесь
+remote_user = appuser
+private_key_file = ~/.ssh/appuser
+host_key_checking = False
+``` 
+Переменные групп хостов
+20. Создадим директорию ```group_vars``` в директориях окружений ```environments/prod``` и ```environments/stage```
+```css
+$ mkdir environments/stage/group_vars
+```
+21. Создаем файл environments/stage/group_vars/app для определения переменных для групп хостов app
+```css
+$ touch environments/stage/group_vars/app 
+```
+
+Переносим в него переменные из плейбуков app.yml
+
+22. Создаем файл environments/stage/group_vars/db для определения переменных для групп хостов db
+```css
+$ touch environments/stage/group_vars/db 
+```
+
+23. Создаем файл ```ansible/environments/stage/group_vars/all``` с переменными для группы хостов
+Содержимое файла
+```css
+env: stage
+```
+
+24. Создаем окружение prod и копируем в него конфиги app, db, all из окружения stage изменив в ```ansible/environments/prod/group_vars/all``` значение переменной ```env: prod```
+
+25. Для вывода в терминал информации об окружении делаем под настройки
+Для роли app в файле ansible/roles/app/defaults/main.yml
+```css
+# defaults file for app
+db_host: 127.0.0.1
+env: local
+```
+
+Для роли db в файле ansible/roles/db/defaults/main.yml:
+```css
+# defaults file for db
+mongo_port: 27017
+mongo_bind_ip: 127.0.0.1
+env: local
+```
+
+Для роли app (файл ansible/roles/app/tasks/main.yml)
+```css
+# tasks file for app
+- name: Show info about the env this host belongs to
+debug:
+msg: "This host is in {{ env }} environment!!!"
+```  
+
+Добавим такой же таск в роль db (файл ansible/roles/db/tasks/main.yml)
+```css
+# tasks file for db
+- name: Show info about the env this host belongs to
+debug: msg="This host is in {{ env }} environment!!!"
+```
+
+26. Создаем директорию ```ansible/playbooks``` и переносим в нее все плейбуки
+
+27. Создаем директорию ```ansible/old``` и переносим в нее оставшиеся файлы от прошлых ДЗ не относящиеся к текущей конфигурации
+
+28. После переноса плейбуков меняем в конфигах Packer пути до ```packer_app.yml``` и ```packer_db.yml```
+
+29. Улучшаяем ```ansible.cfg```
+Содержимое файла
+```css
+[defaults]
+inventory = ./environments/stage/inventory.yml
+remote_user = ubuntu
+private_key_file = ~/.ssh/appuser
+# Отключим проверку SSH Host-keys (поскольку они всегда разные для новых инстансов)
+host_key_checking = False
+# Отключим создание *.retry-файлов (они нечасто нужны, но мешаются под руками)
+retry_files_enabled = False
+# # Явно укажем расположение ролей (можно задать несколько путей через ; )
+roles_path = ./roles
+
+[diff]
+# Включим обязательный вывод diff при наличии изменений и вывод 5 строк контекста
+always = True
+context = 5
+```
+
+30. Пересоздаем инфраструктуру и проверяем выполнение плейбуков
+```css
+$ terraform destroy
+$ terraform apply
+$ ansible-playbook playbooks/site.yml --check
+$ ansible-playbook playbooks/site.yml
+```
+
+31. Проверим доступность приложения по ip app сервера и порту 9292 из интернета
+
+32. Тестируем инфраструктуру prod, перед этим удаляем инфраструктуру stage
+
+Поднимаем через Terraform prod среду и запускаем ansible-playbook 
+```css
+$ ansible-playbook -i environments/prod/inventory.yml playbooks/site.yml --check
+$ ansible-playbook -i environments/prod/inventory.yml playbooks/site.yml
+```
+
+33. Проверим доступность приложения по ip app сервера и порту 9292 из интернета
+
+Работа с Community-ролями
+Используем роль jdauphant.nginx и настроим обратное проксирование для нашего приложения с помощью nginx
+
+34. Создадим файлы ```environments/stage/requirements.yml``` и ```environments/prod/requirements.yml``` и добавим в них запись
+```css
+- src: jdauphant.nginx
+version: v2.21.1
+```
+
+35. Устанавливаем роль
+```css
+$ ansible-galaxy install -r environments/stage/requirements.yml
+```  
+
+36. Добавляем в .gitignore компюнити роль, что бы она не попала в репозиторий
+```css
+$ echo 'jdauphant.nginx' >> ../.gitignore
+```
+
+37. Добавим настройки проксирования nginx в ```stage/group_vars/app``` и ```prod/group_vars/app``` 
+```css
+nginx_sites:
+  default:
+    - listen 80
+    - server_name "reddit"
+    - location / {
+        proxy_pass http://127.0.0.1:порт_приложения;
+      }
+```
+
+Самостоятельное задание
+1. Порт 80 и так открыт (не запрещен), дополнительных настроек делать не трубуется
+2. Добавим вызов роли jdauphant.nginx в плейбук app.yml
+```css
+- name: Configure App
+  hosts: app
+  become: true
+
+  roles:
+    - app
+    - jdauphant.nginx
+```
+3. Плейбук site.yml успешно применился на окружении stage, приложение теперь доступно по порту 80
+
+Работа с Ansible Vault
+
+1. Создадим файл vault.key с произвольной строкой ключа и разместим файл вне репозитория
+```css
+$ echo '**TTV8k$tsV!fAOPMa1C3G2l9!0zd6U#TzxL#HlG' > ~/.ansible/vault.key
+```
+
+2. В ```ansible.cfg``` добавим опцию ```vault_password_file``` в секцию [defaults] с путем до ключем
+```css
+[defaults]
+...
+# Vault password file
+vault_password_file = ~/.ansible/vault.key
+```
+ 
+3. Добавляем плейбук для создания пользователей
+```css
+$ touch ansible/playbooks/users.yml
+``` 
+Содержимое файла
+```css
+---
+- name: Create users
+  hosts: all
+  become: true
+
+  vars_files:
+    - "{{ inventory_dir }}/credentials.yml"
+
+  tasks:
+    - name: create users
+      user:
+        name: "{{ item.key }}"
+        password: "{{ item.value.password|password_hash('sha512', 65534|random(seed=inventory_hostname)|string) }}"
+        groups: "{{ item.value.groups | default(omit) }}"
+      with_dict: "{{ credentials.users }}"
+```
+
+4. Создадим файл с данными пользователей для каждого окружения
+```css
+$ touch ansible/environments/prod/credentials.yml
+```
+
+Содержимое файла
+```css
+---
+credentials:
+  users:
+    admin:
+      password: admin123
+      groups: sudo
+```
+
+```css
+$ touch ansible/environments/stage/credentials.yml
+```
+
+Содержимое файла
+```css
+---
+credentials:
+  users:
+    admin:
+      password: qwerty123
+      groups: sudo
+    qauser:
+      password: test123
+```
+
+5. Шифруем файлы с данными пользователей используя ключ ```vault.key```
+```css
+$ ansible-vault encrypt environments/prod/credentials.yml
+$ ansible-vault encrypt environments/stage/credentials.yml
+```
+
+6. Проверяем, файлы зашифрованы
+
+7. Добавляем вызов плейбука ```users.yml``` в ```site.yml```
+Содерждимое ```site.yml```
+```css
+---
+- import_playbook: db.yml
+- import_playbook: app.yml
+- import_playbook: deploy.yml
+- import_playbook: users.yml
+```
+
+8. Поднимаем окружение stage и вызываем в нем главный плейбук
+```css
+$ ansible-playbook site.yml —check
+$ ansible-playbook site.yml
+```
+
+9. Для проверки того, что необходимые пользователи создались на инстансах app и db, можно через ansible прочитать файл ```/etc/passwd``` на remote хостах
+```css
+$ ansible app -m shell -a 'cat /etc/passwd'
+$ ansible db -m shell -a 'cat /etc/passwd'
+```
+
+
